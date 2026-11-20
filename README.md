@@ -2,7 +2,7 @@
 
 Guía visual para quien prepara y da medicamentos: qué toca ahora, cómo prepararlo paso a paso con dibujos, y registro de lo que se dio. Funciona en cualquier celular o computador con navegador, sin internet una vez instalada. Las alarmas suenan desde el Reloj del teléfono.
 
-Versión 0.3 · 19 nov 2026. Permite editar y añadir medicamentos en el teléfono (cada cambio pide su fuente, pasa la misma revisión y se puede deshacer), fijar los minutos para preparar de cada hora y descargar los datos. Trae también la guía de hora pico y la marca de ajuste de la familia de la 0.2.
+Versión 0.3.1 · 19 nov 2026. Permite editar y añadir medicamentos en el teléfono (cada cambio pide su fuente, pasa la misma revisión y se puede deshacer), fijar los minutos para preparar de cada hora y descargar los datos. Usa la jeringa de cada medicamento en todos sus pasos y avisa cuando lo que se mide cae entre dos rayas. Trae también la guía de hora pico y la marca de ajuste de la familia de la 0.2.
 
 ## Reglas que el código respeta
 

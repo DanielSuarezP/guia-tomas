@@ -3,5 +3,5 @@
   "version": "0.3.0",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node --test pruebas/datos.test.mjs pruebas/edicion.test.mjs" }
+  "scripts": { "test": "node --test pruebas/datos.test.mjs pruebas/edicion.test.mjs pruebas/jeringas.test.mjs" }
 }

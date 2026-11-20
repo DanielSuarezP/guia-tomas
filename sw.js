@@ -1,6 +1,6 @@
 // Guarda la app en el teléfono para que abra sin internet.
 // Al cambiar cualquier archivo, sube el número de VERSION.
-const VERSION = 'guia-tomas-0.3';
+const VERSION = 'guia-tomas-0.3.1';
 const ARCHIVOS = [
   './',
   'index.html',
