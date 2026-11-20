@@ -28,8 +28,8 @@ Un archivo JSON por paciente. El ejemplo completo está en `datos/ejemplo-fictic
 | `tomas` | Sí si vigente | `[{ "hora": "10:00", "dias": ["lun","mie","vie"] }]`. Sin `dias` = todos los días |
 | `tomas_fuente` | Sí | Fuente de las horas (o `fuente` en cada toma) |
 | `dosis` | Sí si vigente; prohibida si por confirmar | `{ "texto", "valor", "unidad", "cantidad", "medida", "fuente" }`. Ej.: 15 mg = 1,5 cc → `"valor": 15, "unidad": "mg", "cantidad": 1.5, "medida": "cc"` |
-| `concentracion` | No | `{ "valor", "unidad", "ml", "fuente" }`. Si está, la app revisa: valor de la dosis = valor ÷ ml × cantidad |
-| `medida` | Sí si vigente | `{ "instrumento": "jeringa", "capacidad": 3, "dibujo_verificado": false, "fuente" }`, o `"cucharita"` / `"gotas"`. Sin `capacidad`, la app muestra la cantidad sin dibujo |
+| `concentracion` | No | `{ "valor", "unidad", "ml", "fuente" }`. Si está, la app revisa: valor de la dosis = valor ÷ ml × cantidad. Si la dosis va en gotas, en vez de `ml` va `gotas`: `{ "valor": 200, "unidad": "UI", "gotas": 1 }` y la cuenta es valor ÷ gotas × gotas que se dan |
+| `medida` | Sí si vigente | `{ "instrumento": "jeringa", "capacidad": 3, "dibujo_verificado": false, "fuente" }`, o `"cucharita"` / `"gotas"`. Sin `capacidad`, la app muestra la cantidad sin dibujo. Los pasos que miden sin decir jeringa usan esta |
 | `proteccion` | No | `["guantes", "tapabocas"]` |
 | `comida` | No | `{ "regla": "con_comida" \| "sin_comida" \| "antes_de_comer" \| "indiferente" \| "por_confirmar", "texto", "fuente" }` |
 | `preparacion` | Sí si vigente | `{ "tipo", "pasos": [...] }`. Tipos: `abrir_capsula`, `triturar_diluir`, `diluir_tableta`, `medir_liquido`, `contar_gotas`, `perforar_capsula`, `otro` |
@@ -45,7 +45,37 @@ Un archivo JSON por paciente. El ejemplo completo está en `datos/ejemplo-fictic
 |---|---|
 | `texto`, `fuente` | Obligatorios. El texto grande y su fuente |
 | `icono` | Dibujo del paso: `abrir_capsula`, `tableta`, `triturar`, `jarabe`, `gotas`, `cucharita`, `copita`, `agua`, `mezclar`, `tragar`, `botar`, `esperar`, `jeringa`, `manos`, `guantes`, `tapabocas` |
-| `medir` | `{ "cantidad": 1.5, "jeringa": 3 }`: número grande y jeringa dibujada con la raya |
+| `medir` | `{ "cantidad": 1.5, "jeringa": 3 }`: número grande y jeringa dibujada con la raya. Sin `jeringa`, usa la del medicamento |
+| `jeringa` | `3` en un paso que no mide (por ejemplo, gotas en la jeringa sin émbolo): la suma a los materiales de esa hora |
 | `gotas` | `10`: contador de gotas que se tocan |
 | `esperar_min` | `3`: reloj de espera |
 | `dar` | `true` en el paso de la dosis. Su cantidad debe ser igual a la de `dosis` |
+
+## Rayas de las jeringas
+
+La revisión avisa (no bloquea) cuando lo que se mide en un paso no cae justo en una raya de su jeringa, o no cabe en ella. Las rayas son las de las jeringas de la casa, contadas en las fotos del 19 nov 2026: raya más pequeña de 0,02 cc (1 cc), 0,1 cc (3 cc) y 0,2 cc (5 y 10 cc). Están en `RAYAS`, en `js/datos.js` y en `herramientas/validar.py`; si cambian las jeringas, se cambian en los dos.
+
+## Rutina (opcional, desde la versión 0.3)
+
+Minutos para empezar a preparar antes de cada hora. Es la rutina de quien cuida, no un dato médico. Al cargar el archivo, el teléfono los usa para las alarmas de "preparar".
+
+```json
+"rutina": { "fuente": "Rutina (Daniel, 15 nov)", "preparar_min": { "06:00": 20, "10:00": 30 } }
+```
+
+Cada hora va en `HH:MM` y los minutos, de 0 a 120. Con 0 no hay alarma de preparar a esa hora.
+
+## Cambios hechos en el teléfono (`editado`, desde la versión 0.3)
+
+La app los escribe sola al editar o añadir un medicamento; no hace falta escribirlos a mano.
+
+| Campo | Qué es |
+|---|---|
+| `tipo` | `editado` o `agregado` |
+| `fecha` | Día del cambio, `AAAA-MM-DD`. Obligatorio |
+| `fuente` | De dónde sale el cambio, escrito por quien lo hizo. Obligatorio. También queda como `fuente` de cada dato que cambió |
+| `cuidador` | Quién usa ese teléfono |
+| `cambios` | Lista de los campos que cambiaron |
+| `antes` | El medicamento como estaba antes del cambio. Con él se deshace |
+
+En `medida`, `"instrumento": "capsula"` sirve para lo que se da como el contenido de una cápsula, sin medir cc.
