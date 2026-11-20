@@ -58,6 +58,32 @@ export const DIAS_CORTO = {
 
 export const JERINGAS = [1, 3, 5, 10, 20];
 
+// Raya más pequeña de cada jeringa de la casa (AlfaSafe), contada en las
+// fotos del 19 nov 2026. La de 20 no está en casa: no se revisan sus rayas.
+export const RAYAS = { 1: 0.02, 3: 0.1, 5: 0.2, 10: 0.2 };
+
+// ¿La cantidad cae justo en una raya? null si no se conocen las rayas.
+export function caeEnRaya(cantidad, jeringa) {
+  const r = RAYAS[jeringa];
+  if (!r || !(cantidad > 0)) return null;
+  const k = cantidad / r;
+  return Math.abs(k - Math.round(k)) < 1e-6;
+}
+
+// Las dos rayas entre las que cae una cantidad: [abajo, arriba].
+export function rayasVecinas(cantidad, jeringa) {
+  const r = RAYAS[jeringa];
+  const abajo = Math.floor(cantidad / r + 1e-9) * r;
+  return [Math.round(abajo * 1000) / 1000, Math.round((abajo + r) * 1000) / 1000];
+}
+
+// Jeringa con que se mide un paso: la del paso, o la del medicamento.
+export function jeringaDelPaso(m, p) {
+  if (p && p.medir && p.medir.jeringa) return p.medir.jeringa;
+  if (m && m.medida && m.medida.instrumento === 'jeringa' && m.medida.capacidad) return m.medida.capacidad;
+  return null;
+}
+
 const ID_VALIDO = /^[a-z0-9-]+$/;
 
 // ---------- Formatos ----------
@@ -201,14 +227,27 @@ export function validar(d) {
       if (!p.fuente) err(dp, 'Falta la fuente.');
       if (p.medir) {
         if (!(p.medir.cantidad > 0)) err(dp, 'Cantidad no válida.');
+        // Si el texto del paso nombra cc, alguno debe ser la cantidad que se mide.
+        const enTexto = [...String(p.texto || '').matchAll(/(\d+(?:[.,]\d+)?)\s*(?:cc|ml)\b/gi)].map((x) => Number(x[1].replace(',', '.')));
+        if (p.medir.cantidad > 0 && enTexto.length && !enTexto.some((n) => Math.abs(n - p.medir.cantidad) < 1e-9)) {
+          err(dp, `El texto dice ${enTexto.map(numero).join(' y ')} cc, pero la cantidad para medir es ${numero(p.medir.cantidad)} cc.`);
+        }
         if (p.medir.jeringa !== undefined && p.medir.jeringa !== null) {
           if (!JERINGAS.includes(p.medir.jeringa)) err(dp, `Jeringa de ${p.medir.jeringa} cc no reconocida.`);
           else if (p.medir.cantidad > p.medir.jeringa) err(dp, 'La cantidad no cabe en la jeringa.');
         }
       }
       if (p.gotas !== undefined && !(Number.isInteger(p.gotas) && p.gotas > 0)) err(dp, 'Número de gotas no válido.');
+      if (p.jeringa !== undefined && !JERINGAS.includes(p.jeringa)) err(dp, `Jeringa de ${p.jeringa} cc no reconocida.`);
       if (p.esperar_min !== undefined && !(p.esperar_min > 0)) err(dp, 'Minutos de espera no válidos.');
     });
+
+    // Cambio hecho en el teléfono: debe decir de dónde sale y cuándo.
+    if (m.editado !== undefined) {
+      if (!m.editado || !m.editado.fuente || !esFecha(m.editado.fecha)) {
+        err(donde, 'El cambio hecho en el teléfono no tiene fuente o fecha.');
+      }
+    }
 
     if (m.origen !== undefined && m.origen !== 'familia') err(donde, 'Origen no reconocido (use "familia" o quítelo).');
     if (m.origen === 'familia') {
@@ -242,10 +281,28 @@ export function validar(d) {
         } else {
           if (!JERINGAS.includes(m.medida.capacidad)) err(donde, `Jeringa de ${m.medida.capacidad} cc no reconocida.`);
           conFuente(m.medida, donde, 'la jeringa');
-          if (m.dosis && m.dosis.cantidad > m.medida.capacidad) err(donde, 'La dosis no cabe en la jeringa.');
+          const enCc = m.dosis && (m.dosis.medida === undefined || m.dosis.medida === 'cc');
+          if (enCc && m.dosis.cantidad > m.medida.capacidad) err(donde, 'La dosis no cabe en la jeringa.');
           if (!m.medida.dibujo_verificado) av(donde, 'Dibujo de la jeringa aproximado: falta compararlo con la jeringa real.');
         }
       }
+
+      // Cada cantidad que se mide debe caber en su jeringa y caer en una raya.
+      pasos.forEach((p, j) => {
+        if (!p.medir || !(p.medir.cantidad > 0)) return;
+        const jer = jeringaDelPaso(m, p);
+        if (!jer) return;
+        const dp = `${donde}, paso ${j + 1}`;
+        const c = p.medir.cantidad;
+        if (c > jer) {
+          if (!p.medir.jeringa) av(dp, `${numero(c)} cc no caben en la jeringa de ${numero(jer)}.`);
+          return;
+        }
+        if (caeEnRaya(c, jer) === false) {
+          const [a, b] = rayasVecinas(c, jer);
+          av(dp, `${numero(c)} cc no cae en una raya de la jeringa de ${numero(jer)} (rayas de ${numero(RAYAS[jer])} cc): queda entre ${numero(a)} y ${numero(b)}.`);
+        }
+      });
 
       const dar = pasos.find((p) => p.dar);
       if (!dar && pasos.length) av(donde, 'Ningún paso está marcado como el de dar la dosis.');
@@ -272,6 +329,19 @@ export function validar(d) {
     if (!r.fuente) err('Reglas generales', `La regla ${i + 1} no tiene fuente.`);
   });
 
+  // Rutina de quien cuida: minutos para empezar a preparar antes de cada hora.
+  if (d.rutina !== undefined) {
+    const prep = d.rutina && d.rutina.preparar_min;
+    if (!prep || typeof prep !== 'object' || Array.isArray(prep)) {
+      err('Rutina', 'Faltan los minutos para preparar ("preparar_min").');
+    } else {
+      Object.entries(prep).forEach(([hora, min]) => {
+        if (!esHora(hora)) err('Rutina', `Hora no válida: "${hora}" (use HH:MM).`);
+        if (!(Number.isInteger(min) && min >= 0 && min <= 120)) err('Rutina', `Minutos no válidos para las ${hora}: use de 0 a 120.`);
+      });
+    }
+  }
+
   return { errores, avisos };
 }
 
@@ -287,6 +357,20 @@ function revisarAritmetica(m, donde, err, conFuente) {
   }
   if (c.unidad !== ds.unidad) {
     err(donde, `La dosis está en ${ds.unidad} y la concentración en ${c.unidad}.`);
+    return;
+  }
+  // En gotas: valor de la dosis = (valor ÷ gotas de la concentración) × gotas que se dan.
+  if (ds.medida === 'gotas') {
+    if (!(c.gotas > 0)) {
+      err(donde, 'La dosis va en gotas: la concentración debe decir cuántas gotas ("gotas").');
+      return;
+    }
+    const calculo = (c.valor / c.gotas) * ds.cantidad;
+    if (Math.abs(calculo - ds.valor) > Math.max(0.005 * Math.abs(ds.valor), 1e-6)) {
+      err(donde,
+        `Descuadre: ${numero(c.valor)} ${c.unidad} por ${numero(c.gotas)} gota(s) × ${numero(ds.cantidad)} gotas = ` +
+        `${numero(calculo)} ${c.unidad}, pero la dosis dice ${numero(ds.valor)} ${ds.unidad}.`);
+    }
     return;
   }
   if (!(c.ml > 0)) {
@@ -337,6 +421,7 @@ export function materiales(meds) {
     if (m.medida && m.medida.instrumento === 'cucharita') cucharita = true;
     for (const p of (m.preparacion && m.preparacion.pasos) || []) {
       if (p.medir && p.medir.jeringa) jeringas.add(p.medir.jeringa);
+      if (p.jeringa) jeringas.add(p.jeringa);
       if (p.gotas) gotas = true;
     }
   }

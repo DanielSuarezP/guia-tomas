@@ -1,5 +1,6 @@
 // Dibujos simples de la app: íconos y jeringa a escala.
 // Todos son SVG hechos a mano, sin internet.
+import { RAYAS } from './datos.js';
 
 const gota = (x, y, s = 1) =>
   `<path d="M${x} ${y - 9 * s}c0 0-${6 * s} ${6.5 * s}-${6 * s} ${10.5 * s}a${6 * s} ${6 * s} 0 0 0 ${12 * s} 0c0-${4 * s}-${6 * s}-${10.5 * s}-${6 * s}-${10.5 * s}z"/>`;
@@ -93,11 +94,13 @@ export function iconoPaso(paso, med) {
 // Las rayas siguen el patrón común de cada tamaño. Hasta compararlo con
 // la jeringa real (dibujo_verificado), la app avisa que es aproximado.
 
+// La raya menor sale de las fotos de las jeringas de la casa (RAYAS, 19 nov);
+// las rayas largas y los números siguen siendo aproximados.
 const ESCALAS = {
-  1: { menor: 0.05, mayor: 0.1, etiqueta: 0.2 },
-  3: { menor: 0.1, mayor: 0.5, etiqueta: 0.5 },
-  5: { menor: 0.2, mayor: 1, etiqueta: 1 },
-  10: { menor: 0.5, mayor: 1, etiqueta: 2 },
+  1: { menor: RAYAS[1], mayor: 0.1, etiqueta: 0.2 },
+  3: { menor: RAYAS[3], mayor: 0.5, etiqueta: 0.5 },
+  5: { menor: RAYAS[5], mayor: 1, etiqueta: 1 },
+  10: { menor: RAYAS[10], mayor: 1, etiqueta: 2 },
   20: { menor: 1, mayor: 5, etiqueta: 5 },
 };
 

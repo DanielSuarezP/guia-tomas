@@ -1,13 +1,19 @@
-// Guía de tomas: pantallas y navegación. Versión 0.2: guía de hora pico y ajustes de la familia.
+// Guía de tomas: pantallas y navegación.
+// 0.2: guía de hora pico y ajustes de la familia. 0.3: editar y añadir medicamentos en el teléfono,
+// minutos para preparar por hora y descarga de los datos, jeringa de cada paso y aviso de rayas.
 import {
   validar, tomasDelDia, materiales, alarmas, resumen, minutos, horaBonita, numero,
   fechaISO, fechaBonita, diasTexto, GRUPOS, COMIDA, PROTECCION, PREPARACIONES, DIAS_NOMBRE, diaSemana,
+  ESTADOS, PRESENTACIONES, JERINGAS, DIAS, DIAS_CORTO, jeringaDelPaso,
 } from './datos.js';
 import { almacen } from './almacen.js';
 import { icono, iconoPresentacion, iconoPaso, jeringa, gotaContador } from './dibujos.js';
 import { hayVoz, leer, callar } from './voz.js';
+import {
+  guardarMed, deshacer, medVacio, ultimoCambio, fijarRuta, leerRuta, leerNumero, NOMBRES_CAMBIO, copiaParaDescargar,
+} from './edicion.js';
 
-export const VERSION_APP = '0.2.1';
+export const VERSION_APP = '0.3.1';
 
 const raiz = document.getElementById('app');
 
@@ -20,6 +26,8 @@ const estado = {
   voz: '',              // texto del botón Escuchar
   borrar: null,         // id de paciente esperando el segundo toque
   mensaje: null,        // { tipo, texto }
+  borrador: null,       // { medId, m, fuente, error, errores } mientras se edita o se añade
+  deshacer: null,       // id de medicamento esperando el segundo toque para deshacer
 };
 
 function hoy() {
@@ -61,7 +69,42 @@ function estadoHora(d, iso, hora) {
 }
 
 function insigniaAjuste(m) {
-  return m.origen === 'familia' ? '<span class="insignia azul">Ajuste de la familia</span>' : '';
+  return (m.origen === 'familia' ? '<span class="insignia azul">Ajuste de la familia</span> ' : '') + insigniaEditado(m);
+}
+
+function insigniaEditado(m, chica = false) {
+  if (!m.editado) return '';
+  const txt = m.editado.tipo === 'agregado' ? 'Agregado en este teléfono' : 'Editado en este teléfono';
+  return `<span class="insignia ambar${chica ? ' chica' : ''}">${chica ? (m.editado.tipo === 'agregado' ? 'Agregado' : 'Editado') : txt}</span>`;
+}
+
+// Qué cambió, cuándo, quién y con qué fuente.
+function notaEditado(m, detalle = false) {
+  const e = m.editado;
+  if (!e) return '';
+  const que = (e.cambios || []).map((c) => NOMBRES_CAMBIO[c] || c).filter((v, i, a) => a.indexOf(v) === i).join(', ');
+  const titulo = e.tipo === 'agregado' ? 'Agregado en este teléfono' : 'Cambiado en este teléfono';
+  return `<div class="nota ambar">${icono('aviso')}<div><strong>${titulo}</strong>
+    <p>${esc(fechaBonita(e.fecha))}${e.cuidador ? ' · ' + esc(e.cuidador) : ''}${que && e.tipo !== 'agregado' ? ' · ' + esc(que) : ''}</p>
+    <p class="fuente">Fuente: ${esc(e.fuente)}</p>
+    ${detalle && e.antes ? valoresAnteriores(e) : ''}</div></div>`;
+}
+
+function valoresAnteriores(e) {
+  const a = e.antes;
+  const filas = [];
+  const c = new Set(e.cambios || []);
+  if (c.has('nombre')) filas.push(['Nombre', a.nombre]);
+  if (c.has('estado')) filas.push(['Estado', ESTADOS[a.estado] || a.estado]);
+  if (c.has('presentacion')) filas.push(['Presentación', a.presentacion && a.presentacion.texto]);
+  if (c.has('tomas')) filas.push(['Horas', (a.tomas || []).map((t) => `${horaBonita(t.hora)} (${diasTexto(t.dias)})`).join(', ')]);
+  if (c.has('dosis')) filas.push(['Dosis', a.dosis ? a.dosis.texto : 'Por confirmar']);
+  if (c.has('concentracion')) filas.push(['Concentración', a.concentracion ? `${numero(a.concentracion.valor)} ${a.concentracion.unidad} en ${a.concentracion.gotas ? numero(a.concentracion.gotas) + ' gota(s)' : numero(a.concentracion.ml) + ' cc'}` : 'Sin dato']);
+  if (c.has('medida')) filas.push(['Se mide con', a.medida ? `${a.medida.instrumento}${a.medida.capacidad ? ' de ' + numero(a.medida.capacidad) : ''}` : 'Sin dato']);
+  if (c.has('comida')) filas.push(['Comida', a.comida ? `${COMIDA[a.comida.regla] || ''}${a.comida.texto ? ': ' + a.comida.texto : ''}` : 'Sin dato']);
+  if (c.has('preparacion')) filas.push(['Pasos', ((a.preparacion && a.preparacion.pasos) || []).map((p, i) => `${i + 1}. ${p.texto}`).join(' ')]);
+  if (!filas.length) return '';
+  return `<p class="etiqueta">Antes del cambio</p><ul class="antes">${filas.map(([t, v]) => `<li><b>${esc(t)}:</b> ${esc(v || '')}</li>`).join('')}</ul>`;
 }
 
 function notaAjuste(m) {
@@ -128,6 +171,7 @@ function chipMedida(m) {
   }
   if (m.medida.instrumento === 'gotas') return chip('gotas', 'Gotas', 'neutro');
   if (m.medida.instrumento === 'cucharita') return chip('cucharita', 'Cucharita', 'neutro');
+  if (m.medida.instrumento === 'capsula') return chip('capsula', 'Cápsula', 'neutro');
   return '';
 }
 
@@ -153,7 +197,7 @@ function filaMed(m, pid, iso, hora) {
   const ico = m.estado === 'vigente' ? iconoPresentacion(m.presentacion && m.presentacion.tipo) : 'pregunta';
   return `<li class="fila-med${reg ? ' hecho' : ''}${m.estado !== 'vigente' ? ' confirmar' : ''}">
     ${icono(ico, 'ico-med')}
-    <span class="nombre">${esc(m.nombre)}${m.origen === 'familia' ? ' <span class="insignia azul chica">Familia</span>' : ''}</span>
+    <span class="nombre">${esc(m.nombre)}${m.origen === 'familia' ? ' <span class="insignia azul chica">Familia</span>' : ''}${m.editado ? ' ' + insigniaEditado(m, true) : ''}</span>
     ${dosisCorta(m)}
     ${reg ? `<span class="marca-dado" aria-label="Dado">${icono('dado')}</span>` : ''}
   </li>`;
@@ -386,6 +430,7 @@ function pasoInicial(d, m, iso) {
     (m.comida && m.comida.texto ? ` ${m.comida.texto}` : '');
   return `<h2>Antes de empezar</h2>
     ${notaAjuste(m)}
+    ${notaEditado(m)}
     <div class="fichas">${fichas.map(([ic, txt]) => `<div class="ficha ${ic === 'guantes' || ic === 'tapabocas' ? 'ambar' : ''}${ic === 'sin_comida' || ic === 'antes_de_comer' ? ' rojo' : ''}">${icono(ic)}<span>${esc(txt)}</span></div>`).join('')}</div>
     ${m.comida && m.comida.texto ? `<p class="texto-paso chico">${esc(m.comida.texto)}</p><p class="fuente">${esc(m.comida.fuente || '')}</p>` : ''}
     ${almacen.esDiaExamen(d.paciente.id, iso) && m.dia_examen ? `<div class="nota ambar">${icono('examen')}<div><strong>Hoy es día del examen</strong><p>${esc(m.dia_examen.texto)}</p></div></div>` : ''}
@@ -396,8 +441,8 @@ function pasoNormal(m, p, clave) {
   let ilustracion = '';
   let vozExtra = '';
   if (p.medir) {
-    const cap = p.medir.jeringa || (p.dar && m.medida && m.medida.capacidad) || null;
-    const verificado = p.dar ? !!(m.medida && m.medida.dibujo_verificado) : !!p.medir.dibujo_verificado;
+    const cap = jeringaDelPaso(m, p);
+    const verificado = p.medir.jeringa && !p.dar ? !!p.medir.dibujo_verificado : !!(m.medida && m.medida.dibujo_verificado);
     ilustracion = `<p class="cantidad-grande">${numero(p.medir.cantidad)} cc</p>
       ${cap ? jeringa({ capacidad: cap, cantidad: p.medir.cantidad }) : `<div class="ico-paso">${icono('jeringa')}</div><p class="nota-chica">Jeringa: por confirmar</p>`}
       ${cap ? `<p class="nota-chica">Jeringa de ${numero(cap)}${verificado ? '' : ' · dibujo aproximado: compárelo con su jeringa'}</p>` : ''}`;
@@ -486,6 +531,8 @@ function pantallaLista() {
   const grupos = Object.keys(GRUPOS).filter((g) => d.medicamentos.some((m) => m.grupo === g));
   return `
   <h1>Medicamentos</h1>
+  ${mensajeUnaVez()}
+  <a class="boton" href="#nuevo">${icono('lista')}<span>Añadir medicamento</span></a>
   <div class="filtros">${boton('estado', 'todos', 'Todos')}${boton('estado', 'vigente', 'Vigentes')}${boton('estado', 'por_confirmar', 'Por confirmar')}</div>
   <div class="filtros">${boton('grupo', 'todos', 'Todos los grupos')}${grupos.map((g) => boton('grupo', g, GRUPOS[g])).join('')}</div>
   <div class="filtros">${boton('guantes', !f.guantes, f.guantes ? 'Con guantes ✓' : 'Con guantes')}</div>
@@ -505,13 +552,16 @@ function pantallaMed(id) {
   if (!m) return '<p class="vacio">No se encontró el medicamento.</p>';
   const fila = (titulo, contenido, fuente) => contenido ? `<div class="dato"><p class="etiqueta">${titulo}</p><div>${contenido}</div>${fuente ? `<p class="fuente">${esc(fuente)}</p>` : ''}</div>` : '';
   const primeraHora = (m.tomas || [])[0];
+  const pideDeshacer = estado.deshacer === m.id;
   return `
   <a class="volver" href="#lista">${icono('atras')}<span>Medicamentos</span></a>
+  ${mensajeUnaVez()}
   <section class="tarjeta med${m.estado !== 'vigente' ? ' confirmar' : ''}">
     <div class="med-cabeza">${icono(m.estado === 'vigente' ? iconoPresentacion(m.presentacion && m.presentacion.tipo) : 'pregunta', 'ico-med grande')}
       <div><h2>${esc(m.nombre)}</h2><p class="sub">${esc(GRUPOS[m.grupo] || '')}</p>
       ${m.estado !== 'vigente' ? '<span class="insignia ambar">Por confirmar</span>' : ''}${insigniaAjuste(m)}</div></div>
     ${notaAjuste(m)}
+    ${notaEditado(m, true)}
     ${fila('Presentación', esc(m.presentacion && m.presentacion.texto), m.presentacion && m.presentacion.fuente)}
     ${fila('Dosis', m.dosis ? `<strong>${esc(m.dosis.texto)}</strong>` : '<span class="insignia ambar">Por confirmar</span>', m.dosis && m.dosis.fuente)}
     ${fila('Horas', (m.tomas || []).map((t) => `${horaBonita(t.hora)} · ${esc(diasTexto(t.dias))}`).join('<br>'), m.tomas_fuente)}
@@ -523,7 +573,197 @@ function pantallaMed(id) {
     ${fila('Día del examen', m.dia_examen ? esc(m.dia_examen.texto) : '', m.dia_examen && m.dia_examen.fuente)}
     ${fila('Por confirmar con el equipo', (m.por_confirmar || []).length ? `<ul class="pendientes">${m.por_confirmar.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : '', '')}
     ${m.estado === 'vigente' && primeraHora ? `<div class="botones"><a class="boton principal" href="${rPaso(m.id, null, 0)}">${icono('lista')}<span>Ver pasos con dibujos</span></a></div>` : ''}
+    <div class="botones columna">
+      <a class="boton" href="#editar-${m.id}">${icono('lista')}<span>Editar este medicamento</span></a>
+      ${m.editado ? `<button class="boton${pideDeshacer ? ' rojo' : ''}" data-accion="deshacer-med" data-med="${m.id}">${icono('atras')}<span>${pideDeshacer
+        ? (m.editado.tipo === 'agregado' ? '¿Quitarlo? Toque otra vez' : '¿Volver al anterior? Toque otra vez')
+        : (m.editado.tipo === 'agregado' ? 'Quitar este medicamento agregado' : 'Deshacer el último cambio')}</span></button>` : ''}
+    </div>
   </section>`;
+}
+
+function mensajeUnaVez() {
+  if (!estado.mensaje) return '';
+  const m = estado.mensaje;
+  estado.mensaje = null;
+  return `<div class="nota ${m.tipo}">${icono(m.tipo === 'verde' ? 'dado' : 'aviso')}<p>${esc(m.texto)}</p></div>`;
+}
+
+// ---------- Editar o añadir un medicamento ----------
+
+const ICONOS_PASO = {
+  '': 'Sin dibujo', abrir_capsula: 'Abrir cápsula', tableta: 'Tableta', triturar: 'Triturar en bolsa', jarabe: 'Frasco',
+  gotas: 'Gotas', cucharita: 'Cucharita', copita: 'Copita', agua: 'Agua', mezclar: 'Mezclar', tragar: 'Dárselo',
+  botar: 'Botar', esperar: 'Esperar', jeringa: 'Jeringa', manos: 'Manos', guantes: 'Guantes', tapabocas: 'Tapabocas',
+};
+const INSTRUMENTOS = { jeringa: 'Jeringa', cucharita: 'Cucharita', gotas: 'Gotero', capsula: 'Cápsula entera', otro: 'Otro' };
+const ORDEN_DIAS = ['lun', 'mar', 'mie', 'jue', 'vie', 'sab', 'dom'];
+
+function nuevoBorrador(medId) {
+  const d = datosActivos();
+  if (medId) {
+    const m = d.medicamentos.find((x) => x.id === medId);
+    if (!m) return null;
+    const { editado, ...resto } = JSON.parse(JSON.stringify(m));
+    return { medId, m: resto, fuente: '', error: null, errores: null };
+  }
+  return { medId: null, m: medVacio(), fuente: '', error: null, errores: null };
+}
+
+function pantallaEditar() {
+  const d = datosActivos();
+  if (!d) return bienvenida();
+  const b = estado.borrador;
+  if (!b) return '<p class="vacio">No se encontró el medicamento.</p>';
+  const m = b.m;
+  const v = (ruta) => leerRuta(m, ruta);
+  const opciones = (obj, actual) => Object.entries(obj).map(([k, t]) => `<option value="${esc(k)}"${String(actual ?? '') === k ? ' selected' : ''}>${esc(t)}</option>`).join('');
+  const texto = (etq, ruta, { area = false, ph = '', ayuda = '' } = {}) => `<label class="campo"><span>${etq}</span>${area
+    ? `<textarea rows="2" data-b="${ruta}" placeholder="${esc(ph)}">${esc(v(ruta) ?? '')}</textarea>`
+    : `<input type="text" data-b="${ruta}" value="${esc(v(ruta) ?? '')}" placeholder="${esc(ph)}">`}${ayuda ? `<small>${esc(ayuda)}</small>` : ''}</label>`;
+  const num = (etq, ruta, ph = '') => `<label class="campo"><span>${etq}</span><input type="text" inputmode="decimal" data-b="${ruta}" data-t="num" value="${esc(numero(v(ruta)))}" placeholder="${esc(ph)}"></label>`;
+  const sel = (etq, ruta, obj, { re = false, t = '' } = {}) => `<label class="campo"><span>${etq}</span><select data-b="${ruta}"${t ? ` data-t="${t}"` : ''}${re ? ' data-re="1"' : ''}>${opciones(obj, v(ruta))}</select></label>`;
+  const jeringas = { '': 'Sin dato', ...Object.fromEntries(JERINGAS.map((j) => [String(j), `Jeringa de ${j}`])) };
+  const confirmar = m.estado === 'por_confirmar';
+  const pasos = (m.preparacion && m.preparacion.pasos) || [];
+  const tomas = m.tomas || [];
+
+  const errores = b.error || (b.errores && b.errores.length) ? `<section class="tarjeta nota-grande rojo" id="errores">
+      <h2>${icono('aviso')} No se guardó</h2>
+      ${b.error ? `<p>${esc(b.error)}</p>` : ''}
+      ${b.errores && b.errores.length ? `<ul class="problemas">${b.errores.map((e) => `<li><b>${esc(e.donde)}:</b> ${esc(e.msg)}</li>`).join('')}</ul>` : ''}
+    </section>` : '';
+
+  return `
+  <a class="volver" href="${b.medId ? rMed(b.medId) : '#lista'}">${icono('atras')}<span>Cancelar</span></a>
+  <h1>${b.medId ? 'Editar' : 'Añadir medicamento'}</h1>
+  <p class="sub">Escriba los datos tal como los indica el equipo tratante. La app no calcula nada: al guardar revisa que la dosis cuadre con la concentración, y cada dato que cambie queda con la fuente que usted escriba abajo.</p>
+  ${errores}
+  <section class="tarjeta formulario">
+    ${texto('Nombre', 'nombre', { ph: 'Ej.: Fluconazol' })}
+    ${sel('Grupo', 'grupo', GRUPOS)}
+    ${sel('Estado', 'estado', ESTADOS, { re: true })}
+    ${confirmar ? '<p class="nota-chica ambar-texto">Por confirmar: se guarda sin dosis ni cantidades, y no se prepara hasta que el equipo confirme.</p>' : ''}
+  </section>
+
+  <section class="tarjeta formulario">
+    <h2>Presentación</h2>
+    ${sel('Tipo', 'presentacion.tipo', PRESENTACIONES)}
+    ${texto('Cómo viene', 'presentacion.texto', { ph: 'Ej.: Jarabe de 50 mg por 5 mL' })}
+  </section>
+
+  <section class="tarjeta formulario">
+    <h2>Horas</h2>
+    ${tomas.map((t, i) => {
+      const dias = t.dias || DIAS;
+      return `<div class="fila-toma">
+        <label class="campo"><span>Hora ${i + 1}</span><input type="time" data-b="tomas.${i}.hora" value="${esc(t.hora || '')}"></label>
+        <div class="dias" role="group" aria-label="Días">${ORDEN_DIAS.map((x) => `<button type="button" class="dia-boton${dias.includes(x) ? ' activo' : ''}" data-accion="toggle-dia" data-i="${i}" data-dia="${x}" aria-pressed="${dias.includes(x)}" aria-label="${DIAS_NOMBRE[x]}">${DIAS_CORTO[x]}</button>`).join('')}</div>
+        ${t.dias && !t.dias.length ? '<p class="nota-chica rojo-texto">Marque al menos un día.</p>' : ''}
+        ${tomas.length > 1 ? `<button type="button" class="boton chico" data-accion="hora-quitar" data-i="${i}">Quitar esta hora</button>` : ''}
+      </div>`;
+    }).join('')}
+    <button type="button" class="boton chico" data-accion="hora-nueva">+ Añadir hora</button>
+  </section>
+
+  ${confirmar ? '' : `<section class="tarjeta formulario">
+    <h2>Dosis</h2>
+    ${texto('Cómo se lee la dosis', 'dosis.texto', { ph: 'Ej.: 15 mg (1,5 cc)' })}
+    <div class="dos">${num('Cantidad que se da', 'dosis.cantidad', 'Ej.: 1,5')}${sel('Medida', 'dosis.medida', { cc: 'cc', gotas: 'gotas', '': 'Otra' })}</div>
+    <div class="dos">${num('Dosis (número)', 'dosis.valor', 'Ej.: 15')}${texto('Unidad', 'dosis.unidad', { ph: 'mg, mcg, UI' })}</div>
+    <p class="etiqueta">Concentración (para revisar la cuenta)</p>
+    <div class="tres">${num('Valor', 'concentracion.valor', '50')}${texto('Unidad', 'concentracion.unidad', { ph: 'mg' })}${num('En cc', 'concentracion.ml', '5')}</div>
+    <small>Si llena la dosis y la concentración, la app revisa que dosis = valor ÷ cc × cantidad. Si no cuadra, no se guarda.</small>
+  </section>`}
+
+  <section class="tarjeta formulario">
+    <h2>Con qué se mide y protección</h2>
+    ${sel('Se mide con', 'medida.instrumento', { '': 'Sin dato', ...INSTRUMENTOS }, { re: true })}
+    ${(m.medida && m.medida.instrumento) === 'jeringa' ? sel('Jeringa', 'medida.capacidad', jeringas, { t: 'num' }) : ''}
+    <div class="checks">${Object.entries(PROTECCION).map(([k, t]) => `<label class="check"><input type="checkbox" data-t="prot" data-p="${k}"${(m.proteccion || []).includes(k) ? ' checked' : ''}> ${esc(t)}</label>`).join('')}</div>
+  </section>
+
+  <section class="tarjeta formulario">
+    <h2>Comida</h2>
+    ${sel('Regla', 'comida.regla', { '': 'Sin dato', ...COMIDA })}
+    ${texto('Qué dice la indicación', 'comida.texto', { ph: 'Ej.: Lejos de las comidas' })}
+  </section>
+
+  <section class="tarjeta formulario">
+    <h2>Preparación paso a paso</h2>
+    ${sel('Tipo', 'preparacion.tipo', PREPARACIONES)}
+    ${pasos.map((p, j) => `<div class="paso-form">
+      <p class="etiqueta">Paso ${j + 1}</p>
+      ${texto('Qué hacer', `preparacion.pasos.${j}.texto`, { area: true, ph: 'Ej.: Diluya 1 tableta en 5 cc de agua.' })}
+      ${sel('Dibujo', `preparacion.pasos.${j}.icono`, ICONOS_PASO)}
+      ${confirmar ? '' : `<div class="dos">${num('cc a medir', `preparacion.pasos.${j}.medir.cantidad`)}${sel('Jeringa', `preparacion.pasos.${j}.medir.jeringa`, jeringas, { t: 'num' })}</div>
+      <div class="dos">${num('Gotas a contar', `preparacion.pasos.${j}.gotas`)}${num('Minutos de espera', `preparacion.pasos.${j}.esperar_min`)}</div>
+      <label class="check"><input type="radio" name="paso-dar" data-t="dar" data-i="${j}"${p.dar ? ' checked' : ''}> Este es el paso de dar la dosis</label>`}
+      <div class="mover">
+        ${j > 0 ? `<button type="button" class="boton chico" data-accion="paso-subir" data-i="${j}">↑ Subir</button>` : ''}
+        ${j < pasos.length - 1 ? `<button type="button" class="boton chico" data-accion="paso-bajar" data-i="${j}">↓ Bajar</button>` : ''}
+        <button type="button" class="boton chico" data-accion="paso-quitar" data-i="${j}">Quitar</button>
+      </div>
+    </div>`).join('')}
+    <button type="button" class="boton chico" data-accion="paso-nuevo">+ Añadir paso</button>
+  </section>
+
+  <section class="tarjeta formulario">
+    <h2>Cuidados y pendientes</h2>
+    <label class="campo"><span>Cuidados (uno por línea)</span><textarea rows="3" data-b="cuidados" data-t="cuidados">${esc((m.cuidados || []).map((c) => c.texto).join('\n'))}</textarea></label>
+    <label class="campo"><span>Por confirmar con el equipo (uno por línea)</span><textarea rows="3" data-b="por_confirmar" data-t="lineas">${esc((m.por_confirmar || []).join('\n'))}</textarea></label>
+    <label class="check"><input type="checkbox" data-t="familia"${m.origen === 'familia' ? ' checked' : ''}> La familia lo da distinto de la fórmula</label>
+    ${m.origen === 'familia' ? texto('En qué se aparta de la fórmula', 'ajuste.texto', { area: true }) : ''}
+  </section>
+
+  <section class="tarjeta formulario fuente-cambio">
+    <label class="campo"><span>${icono('aviso')} ¿De dónde sale este cambio?</span>
+      <input type="text" data-campo="fuente-cambio" value="${esc(b.fuente)}" placeholder="Ej.: Hoja del equipo, 20 nov · Enfermera por teléfono"></label>
+    <small>Obligatorio. Queda como fuente de cada dato que cambie, con la fecha y el nombre de quien usa este teléfono.</small>
+  </section>
+  <div class="botones">
+    <a class="boton" href="${b.medId ? rMed(b.medId) : '#lista'}">${icono('atras')}<span>Cancelar</span></a>
+    <button class="boton principal" data-accion="guardar-med">${icono('dado')}<span>Guardar</span></button>
+  </div>`;
+}
+
+// Pasa lo escrito en un campo al borrador.
+function tomarCampo(el) {
+  const b = estado.borrador;
+  if (!b) return;
+  const t = el.dataset.t || '';
+  const m = b.m;
+  if (t === 'prot') {
+    const lista = new Set(m.proteccion || []);
+    if (el.checked) lista.add(el.dataset.p); else lista.delete(el.dataset.p);
+    m.proteccion = Object.keys(PROTECCION).filter((k) => lista.has(k));
+    return;
+  }
+  if (t === 'dar') {
+    (m.preparacion.pasos || []).forEach((p, j) => { if (j === Number(el.dataset.i)) p.dar = true; else delete p.dar; });
+    return;
+  }
+  if (t === 'familia') {
+    if (el.checked) { m.origen = 'familia'; m.ajuste = m.ajuste || { texto: '' }; } else { delete m.origen; }
+    refrescar();
+    return;
+  }
+  if (t === 'lineas') { m.por_confirmar = el.value.split('\n'); return; }
+  if (t === 'cuidados') {
+    const antes = m.cuidados || [];
+    m.cuidados = el.value.split('\n').map((linea) => antes.find((c) => c.texto === linea.trim()) || { texto: linea });
+    return;
+  }
+  let valor = el.value;
+  if (t === 'num') valor = leerNumero(valor);
+  fijarRuta(m, el.dataset.b, valor === '' ? undefined : valor);
+  if (el.dataset.re) refrescar();
+}
+
+function irAErrores() {
+  render();
+  const caja = document.getElementById('errores');
+  if (caja) caja.scrollIntoView();
 }
 
 function pantallaAlarmas() {
@@ -531,16 +771,20 @@ function pantallaAlarmas() {
   if (!d) return bienvenida();
   const pid = d.paciente.id;
   const rutina = almacen.rutina(pid);
+  const porHora = rutina.por_hora || {};
   const lista = alarmas(d, rutina);
   const direccion = location.href.split('#')[0];
+  const horas = [...new Set(d.medicamentos.flatMap((m) => (m.tomas || []).map((t) => t.hora)))].sort((a, b) => minutos(a) - minutos(b));
   return `
   <h1>Alarmas</h1>
   <p>Cree estas alarmas en el Reloj del teléfono. Las alarmas del Reloj suenan aunque el teléfono esté en silencio.</p>
-  <div class="tarjeta">
-    <label class="campo"><span>Minutos para preparar antes de cada hora</span>
+  <details class="tarjeta ayuda"${Object.keys(porHora).length ? '' : ' open'}><summary>Minutos para preparar antes de cada hora</summary>
+    <ul class="lista-prep">${horas.map((h) => `<li><span>${esc(horaBonita(h))}</span>
+      <input type="number" inputmode="numeric" min="0" max="120" step="5" value="${Number.isFinite(porHora[h]) ? porHora[h] : ''}" placeholder="${rutina.preparar_min}" data-campo="preparar-hora" data-hora="${h}" aria-label="Minutos para preparar las de ${esc(horaBonita(h))}"><span class="sub">min</span></li>`).join('')}</ul>
+    <label class="campo"><span>Para las horas sin minutos propios</span>
       <input type="number" inputmode="numeric" min="0" max="120" step="5" value="${rutina.preparar_min}" data-campo="preparar"></label>
-    <p class="nota-chica">Es la rutina de quien cuida, no un dato médico. Use 0 si no quiere alarma de preparar.</p>
-  </div>
+    <p class="nota-chica">Es la rutina de quien cuida, no un dato médico. Use 0 si no quiere alarma de preparar a esa hora.</p>
+  </details>
   <ul class="lista-alarmas">${lista.map((a) => `<li class="${a.tipo}">
     ${icono(a.tipo === 'preparar' ? 'reloj_arena' : 'alarma')}
     <div><p class="hora">${horaBonita(a.hora)}</p><p>${esc(a.etiqueta)}</p><p class="sub">${esc(diasTexto(a.dias))}</p></div></li>`).join('')}</ul>
@@ -582,7 +826,13 @@ function pantallaDatos() {
         <p><b>${esc(r.paciente)}</b> · datos al ${esc(fechaBonita(r.datos_al))}</p>
         <p>${r.vigentes} vigentes · ${r.por_confirmar} por confirmar · ${r.ya_no_se_dan} que ya no se dan</p>
         ${resultado.avisos.length ? `<p class="etiqueta">Para revisar (${resultado.avisos.length})</p><ul class="problemas ambar">${resultado.avisos.map((e) => `<li><b>${esc(e.donde)}:</b> ${esc(e.msg)}</li>`).join('')}</ul>` : ''}
+        ${datos.rutina && datos.rutina.preparar_min ? `<p>Trae los minutos para preparar de ${Object.keys(datos.rutina.preparar_min).length} horas.</p>` : ''}
         ${pacientes.some((p) => p.id === datos.paciente.id) ? '<p class="nota-chica">Ya hay datos de este paciente: se reemplazan. El registro de dados se conserva.</p>' : ''}
+        ${(() => {
+          const actual = almacen.datos(datos.paciente.id);
+          const uc = actual && ultimoCambio(actual);
+          return uc ? `<p class="nota-chica rojo-texto">Ojo: se pierden los cambios hechos en este teléfono (el último, del ${esc(fechaBonita(uc))}). Si los necesita, cancele y antes toque "Descargar mis datos".</p>` : '';
+        })()}
         <div class="botones"><button class="boton" data-accion="cancelar-carga">${icono('atras')}<span>Cancelar</span></button>
         <button class="boton principal" data-accion="usar-carga">${icono('dado')}<span>Usar estos datos</span></button></div></section>`;
     }
@@ -602,9 +852,10 @@ function pantallaDatos() {
     <label class="boton principal">${icono('subir')}<span>Cargar archivo de datos</span>
       <input type="file" accept=".json,application/json" data-campo="archivo" hidden></label>
     <button class="boton" data-accion="ejemplo">${icono('lista')}<span>Probar con datos de ejemplo</span></button>
-    ${activo ? `<button class="boton" data-accion="exportar">${icono('bajar')}<span>Guardar copia (datos y dados)</span></button>` : ''}
+    ${activo ? `<button class="boton" data-accion="exportar">${icono('bajar')}<span>Descargar mis datos</span></button>` : ''}
   </div>
-  <p class="nota-chica">La edición de datos en el teléfono llega en la versión del 20 nov.</p>
+  ${activo ? '<p class="nota-chica">"Descargar mis datos" guarda un archivo con los medicamentos, los cambios hechos aquí, los minutos para preparar y el registro de dados. Sirve de respaldo, para revisarlo en el computador y para cargarlo en otro teléfono.</p>' : ''}
+  <p class="nota-chica">Para editar o añadir un medicamento: Lista → toque el medicamento → "Editar", o "Añadir medicamento".</p>
   ${tarjetaCuidador()}
   <p class="version">Guía de tomas ${VERSION_APP}</p>`;
 }
@@ -615,11 +866,13 @@ function marco(contenido, ruta) {
   const d = datosActivos();
   const nav = [['#ahora', 'casa', 'Ahora'], ['#lista', 'lista', 'Lista'], ['#alarmas', 'alarma', 'Alarmas'], ['#datos', 'datos', 'Datos']];
   const base = ruta.split('-')[0];
-  const actual = base === 'hora' || base === 'paso' || base === 'espera' || base === 'ahora' ? '#ahora' : base === 'med' ? '#lista' : '#' + base;
+  const actual = base === 'hora' || base === 'paso' || base === 'espera' || base === 'ahora' ? '#ahora'
+    : base === 'med' || base === 'editar' || base === 'nuevo' ? '#lista' : '#' + base;
+  const uc = d ? ultimoCambio(d) : null;
   return `
   ${d ? `<header class="barra">
     <a class="paciente" href="#datos">${icono('persona')}<span>${esc(d.paciente.nombre)}</span></a>
-    <span class="chip-fecha">Datos al ${esc(fechaBonita(d.datos_al))}</span>
+    <span class="chip-fecha">Datos al ${esc(fechaBonita(d.datos_al))}${uc ? `<br><b>cambios del ${esc(fechaBonita(uc).replace(/ \d{4}$/, ''))}</b>` : ''}</span>
   </header>
   ${d.aviso ? `<div class="aviso-datos">${icono('aviso')}<span>${esc(d.aviso)}</span></div>` : ''}` : ''}
   ${d ? '' : '<div class="margen-arriba"></div>'}
@@ -635,7 +888,16 @@ export function render() {
   callar();
   const ruta = rutaActual();
   let html;
-  if (ruta.startsWith('hora-')) html = pantallaHora(horaDeRuta(ruta.slice(5)));
+  // El borrador vive solo mientras se está en la pantalla de edición.
+  if (ruta.startsWith('editar-') || ruta === 'nuevo') {
+    const medId = ruta === 'nuevo' ? null : ruta.slice(7);
+    if (!estado.borrador || estado.borrador.medId !== medId) estado.borrador = datosActivos() ? nuevoBorrador(medId) : null;
+  } else {
+    estado.borrador = null;
+  }
+  if (!ruta.startsWith('med-')) estado.deshacer = null;
+  if (ruta.startsWith('editar-') || ruta === 'nuevo') html = pantallaEditar();
+  else if (ruta.startsWith('hora-')) html = pantallaHora(horaDeRuta(ruta.slice(5)));
   else if (ruta.startsWith('paso-')) {
     const partes = ruta.slice(5).split('-');
     const n = Number(partes.pop()) || 0;
@@ -686,14 +948,27 @@ async function cargarEjemplo() {
   else refrescar();
 }
 
-function exportar() {
+async function exportar() {
   const d = datosActivos();
   if (!d) return;
-  const copia = { ...d, registro_dados: almacen.registro(d.paciente.id), copia_hecha: new Date().toISOString() };
-  const blob = new Blob([JSON.stringify(copia, null, 2)], { type: 'application/json' });
+  const pid = d.paciente.id;
+  const copia = copiaParaDescargar(d, almacen.rutina(pid), almacen.registro(pid));
+  const nombre = `guia-tomas-${pid}-${fechaISO(new Date())}.json`;
+  const texto = JSON.stringify(copia, null, 2);
+  // En el iPhone, Compartir deja guardarlo en Archivos, mandarlo por AirDrop o por correo.
+  try {
+    const archivo = new File([texto], nombre, { type: 'application/json' });
+    if (navigator.canShare && navigator.canShare({ files: [archivo] })) {
+      await navigator.share({ files: [archivo], title: nombre });
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+  }
+  const blob = new Blob([texto], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `guia-tomas-${d.paciente.id}-${fechaISO(new Date())}.json`;
+  a.download = nombre;
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
@@ -790,6 +1065,10 @@ document.addEventListener('click', async (ev) => {
       const prev = estado.carga.datos;
       almacen.guardarDatos(prev);
       almacen.fijarActivo(prev.paciente.id);
+      if (prev.rutina && prev.rutina.preparar_min) {
+        const r = almacen.rutina(prev.paciente.id);
+        almacen.fijarRutina(prev.paciente.id, { ...r, por_hora: { ...prev.rutina.preparar_min } });
+      }
       estado.carga = null;
       estado.mensaje = { tipo: 'verde', texto: `Datos de ${prev.paciente.nombre} guardados en este teléfono.` };
       location.hash = '#ahora';
@@ -804,7 +1083,68 @@ document.addEventListener('click', async (ev) => {
       refrescar();
       break;
     }
-    case 'exportar': exportar(); break;
+    case 'exportar': await exportar(); break;
+    // Edición
+    case 'toggle-dia': {
+      const t = estado.borrador.m.tomas[Number(el.dataset.i)];
+      const dias = new Set(t.dias || DIAS);
+      if (dias.has(el.dataset.dia)) dias.delete(el.dataset.dia); else dias.add(el.dataset.dia);
+      t.dias = DIAS.filter((x) => dias.has(x));
+      if (t.dias.length === 7) delete t.dias;
+      refrescar();
+      break;
+    }
+    case 'hora-nueva': estado.borrador.m.tomas = [...(estado.borrador.m.tomas || []), { hora: '' }]; refrescar(); break;
+    case 'hora-quitar': estado.borrador.m.tomas.splice(Number(el.dataset.i), 1); refrescar(); break;
+    case 'paso-nuevo': {
+      const m = estado.borrador.m;
+      m.preparacion = m.preparacion || { tipo: 'otro', pasos: [] };
+      m.preparacion.tipo = m.preparacion.tipo || 'otro';
+      m.preparacion.pasos = [...(m.preparacion.pasos || []), { texto: '' }];
+      refrescar();
+      break;
+    }
+    case 'paso-quitar': estado.borrador.m.preparacion.pasos.splice(Number(el.dataset.i), 1); refrescar(); break;
+    case 'paso-subir':
+    case 'paso-bajar': {
+      const pasos = estado.borrador.m.preparacion.pasos;
+      const i = Number(el.dataset.i);
+      const j = a === 'paso-subir' ? i - 1 : i + 1;
+      [pasos[i], pasos[j]] = [pasos[j], pasos[i]];
+      refrescar();
+      break;
+    }
+    case 'guardar-med': {
+      const b = estado.borrador;
+      const r = guardarMed(d, b.medId, b.m, { fuente: b.fuente, cuidador: almacen.cuidador(), fecha: fechaISO(new Date()) });
+      if (r.error) { b.error = r.error; b.errores = null; irAErrores(); break; }
+      if (r.resultado.errores.length) { b.error = null; b.errores = r.resultado.errores; irAErrores(); break; }
+      almacen.guardarDatos(r.datos);
+      const que = r.cambios.map((c) => NOMBRES_CAMBIO[c] || c).filter((v, i, l) => l.indexOf(v) === i).join(', ');
+      estado.borrador = null;
+      estado.mensaje = {
+        tipo: 'verde',
+        texto: `${b.medId ? 'Guardado' : 'Añadido'}: ${r.med.nombre}.${b.medId ? ` Cambió: ${que}.` : ''}`,
+      };
+      location.hash = rMed(r.med.id);
+      break;
+    }
+    case 'deshacer-med': {
+      const id = el.dataset.med;
+      if (estado.deshacer !== id) { estado.deshacer = id; refrescar(); break; }
+      const r = deshacer(d, id);
+      estado.deshacer = null;
+      if (!r || r.resultado.errores.length) {
+        estado.mensaje = { tipo: 'rojo', texto: 'No se pudo deshacer: el valor anterior no pasa la revisión.' };
+        refrescar();
+        break;
+      }
+      almacen.guardarDatos(r.datos);
+      const sigue = r.datos.medicamentos.some((m) => m.id === id);
+      estado.mensaje = { tipo: 'verde', texto: sigue ? 'Listo: volvió al valor anterior.' : 'Listo: se quitó el medicamento agregado.' };
+      if (sigue) refrescar(); else location.hash = '#lista';
+      break;
+    }
     case 'copiar-alarmas': {
       const lista = alarmas(d, almacen.rutina(d.paciente.id));
       const texto = lista.map((x) => `${horaBonita(x.hora)} · ${x.etiqueta} · ${diasTexto(x.dias)}`).join('\n');
@@ -820,10 +1160,32 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
+// Lo que se escribe en el formulario de edición pasa al borrador al momento.
+document.addEventListener('input', (ev) => {
+  const el = ev.target;
+  if (!el.dataset || !estado.borrador) return;
+  if (el.dataset.campo === 'fuente-cambio') { estado.borrador.fuente = el.value; return; }
+  if (el.dataset.b && el.tagName !== 'SELECT' && el.type !== 'checkbox' && el.type !== 'radio') tomarCampo(el);
+});
+
 document.addEventListener('change', (ev) => {
   const el = ev.target;
-  if (!el.dataset || !el.dataset.campo) return;
+  if (!el.dataset) return;
+  if (estado.borrador && (el.dataset.b || el.dataset.t) && (el.tagName === 'SELECT' || el.type === 'checkbox' || el.type === 'radio' || el.type === 'time')) {
+    tomarCampo(el);
+    return;
+  }
+  if (!el.dataset.campo) return;
   if (el.dataset.campo === 'archivo' && el.files && el.files[0]) leerArchivo(el.files[0]);
+  if (el.dataset.campo === 'preparar-hora') {
+    const d = datosActivos();
+    const r = almacen.rutina(d.paciente.id);
+    const porHora = { ...(r.por_hora || {}) };
+    if (String(el.value).trim() === '') delete porHora[el.dataset.hora];
+    else porHora[el.dataset.hora] = Math.max(0, Math.min(120, Math.round(Number(el.value) || 0)));
+    almacen.fijarRutina(d.paciente.id, { ...r, por_hora: porHora });
+    refrescar();
+  }
   if (el.dataset.campo === 'cuidador') almacen.fijarCuidador(el.value);
   if (el.dataset.campo === 'preparar') {
     const d = datosActivos();
