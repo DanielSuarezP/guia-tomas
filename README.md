@@ -51,15 +51,6 @@ La revisión en Python tiene sus propias pruebas:
 python3 -m unittest discover pruebas
 ```
 
-## Publicar en GitHub Pages
-
-1. En github.com, **New repository**, nombre `guia-tomas`, **Public**.
-2. **Add file → Upload files**: arrastre el contenido de esta carpeta (no la carpeta ni el zip) y pulse **Commit changes**.
-3. **Settings → Pages**: en "Branch" elija `main` y `/ (root)`, y pulse **Save**.
-4. En uno o dos minutos la app queda en `https://SU-USUARIO.github.io/guia-tomas/`.
-
-La página es pública. Antes de subir, revise que en `datos/` solo esté `ejemplo-ficticio.json`: los archivos reales de pacientes nunca van en esta carpeta.
-
 ## Carpetas
 
 | Carpeta o archivo | Qué hay |
