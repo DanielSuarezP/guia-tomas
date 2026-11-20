@@ -24,6 +24,9 @@ COMIDA = {"con_comida", "sin_comida", "antes_de_comer", "indiferente", "por_conf
 PROTECCION = {"guantes", "tapabocas"}
 DIAS = ["dom", "lun", "mar", "mie", "jue", "vie", "sab"]
 JERINGAS = [1, 3, 5, 10, 20]
+# Raya más pequeña de cada jeringa de la casa (AlfaSafe), contada en las fotos
+# del 19 nov 2026. La de 20 no está en casa: no se revisan sus rayas.
+RAYAS = {1: 0.02, 3: 0.1, 5: 0.2, 10: 0.2}
 ID_VALIDO = re.compile(r"^[a-z0-9-]+$")
 HORA = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -43,6 +46,31 @@ def _es_fecha(t):
         return bool(re.match(r"^\d{4}-\d{2}-\d{2}$", t))
     except (TypeError, ValueError):
         return False
+
+
+def cae_en_raya(cantidad, jeringa):
+    """True/False si la cantidad cae justo en una raya; None si no se conocen las rayas."""
+    r = RAYAS.get(jeringa)
+    if not r or not cantidad or cantidad <= 0:
+        return None
+    k = cantidad / r
+    return abs(k - round(k)) < 1e-6
+
+
+def rayas_vecinas(cantidad, jeringa):
+    r = RAYAS[jeringa]
+    abajo = int(cantidad / r + 1e-9) * r
+    return round(abajo, 3), round(abajo + r, 3)
+
+
+def jeringa_del_paso(m, p):
+    medir = p.get("medir") or {}
+    if medir.get("jeringa"):
+        return medir["jeringa"]
+    medida = m.get("medida") or {}
+    if medida.get("instrumento") == "jeringa" and medida.get("capacidad"):
+        return medida["capacidad"]
+    return None
 
 
 def validar(d):
@@ -140,6 +168,12 @@ def validar(d):
             if medir:
                 if not (medir.get("cantidad") or 0) > 0:
                     err(dp, "Cantidad no válida.")
+                else:
+                    en_texto = [float(x.replace(",", ".")) for x in
+                                re.findall(r"(\d+(?:[.,]\d+)?)\s*(?:cc|ml)\b", str(p.get("texto") or ""), re.I)]
+                    if en_texto and not any(abs(x - medir["cantidad"]) < 1e-9 for x in en_texto):
+                        err(dp, f"El texto dice {' y '.join(_num(x) for x in en_texto)} cc, pero la cantidad "
+                                f"para medir es {_num(medir['cantidad'])} cc.")
                 jer = medir.get("jeringa")
                 if jer is not None:
                     if jer not in JERINGAS:
@@ -148,8 +182,15 @@ def validar(d):
                         err(dp, "La cantidad no cabe en la jeringa.")
             if "gotas" in p and not (isinstance(p["gotas"], int) and p["gotas"] > 0):
                 err(dp, "Número de gotas no válido.")
+            if "jeringa" in p and p["jeringa"] not in JERINGAS:
+                err(dp, f"Jeringa de {p['jeringa']} cc no reconocida.")
             if "esperar_min" in p and not p["esperar_min"] > 0:
                 err(dp, "Minutos de espera no válidos.")
+
+        if "editado" in m:
+            ed = m["editado"]
+            if not isinstance(ed, dict) or not ed.get("fuente") or not _es_fecha(ed.get("fecha")):
+                err(donde, "El cambio hecho en el teléfono no tiene fuente o fecha.")
 
         if "origen" in m and m["origen"] != "familia":
             err(donde, 'Origen no reconocido (use "familia" o quítelo).')
@@ -184,6 +225,16 @@ def validar(d):
                         err(donde, "Para revisar la cuenta faltan el valor o los cc de la dosis.")
                     elif c.get("unidad") != ds.get("unidad"):
                         err(donde, f"La dosis está en {ds.get('unidad')} y la concentración en {c.get('unidad')}.")
+                    elif ds.get("medida") == "gotas":
+                        # valor de la dosis = (valor ÷ gotas de la concentración) × gotas que se dan
+                        if not (c.get("gotas") or 0) > 0:
+                            err(donde, 'La dosis va en gotas: la concentración debe decir cuántas gotas ("gotas").')
+                        else:
+                            calculo = c["valor"] / c["gotas"] * ds["cantidad"]
+                            if abs(calculo - ds["valor"]) > max(0.005 * abs(ds["valor"]), 1e-6):
+                                err(donde, f"Descuadre: {_num(c['valor'])} {c['unidad']} por {_num(c['gotas'])} gota(s) × "
+                                           f"{_num(ds['cantidad'])} gotas = {_num(calculo)} {c['unidad']}, "
+                                           f"pero la dosis dice {_num(ds['valor'])} {ds['unidad']}.")
                     elif not (c.get("ml") or 0) > 0:
                         err(donde, "Faltan los cc de la concentración.")
                     else:
@@ -205,10 +256,26 @@ def validar(d):
                     if cap not in JERINGAS:
                         err(donde, f"Jeringa de {cap} cc no reconocida.")
                     con_fuente(medida, donde, "la jeringa")
-                    if ds and (ds.get("cantidad") or 0) > cap:
+                    en_cc = ds and ds.get("medida") in (None, "cc")
+                    if en_cc and (ds.get("cantidad") or 0) > cap:
                         err(donde, "La dosis no cabe en la jeringa.")
                     if not medida.get("dibujo_verificado"):
                         av(donde, "Dibujo de la jeringa aproximado: falta compararlo con la jeringa real.")
+            # Cada cantidad que se mide debe caber en su jeringa y caer en una raya.
+            for j, p in enumerate(pasos, 1):
+                cant = (p.get("medir") or {}).get("cantidad") or 0
+                jer = jeringa_del_paso(m, p)
+                if cant <= 0 or not jer:
+                    continue
+                dp = f"{donde}, paso {j}"
+                if cant > jer:
+                    if not p["medir"].get("jeringa"):
+                        av(dp, f"{_num(cant)} cc no caben en la jeringa de {_num(jer)}.")
+                    continue
+                if cae_en_raya(cant, jer) is False:
+                    a, b = rayas_vecinas(cant, jer)
+                    av(dp, f"{_num(cant)} cc no cae en una raya de la jeringa de {_num(jer)} "
+                           f"(rayas de {_num(RAYAS[jer])} cc): queda entre {_num(a)} y {_num(b)}.")
             dar = next((p for p in pasos if p.get("dar")), None)
             if not dar and pasos:
                 av(donde, "Ningún paso está marcado como el de dar la dosis.")
@@ -233,6 +300,17 @@ def validar(d):
             err("Reglas generales", f"La regla {i} no tiene texto.")
         if not r.get("fuente"):
             err("Reglas generales", f"La regla {i} no tiene fuente.")
+
+    if "rutina" in d:
+        prep = (d["rutina"] or {}).get("preparar_min") if isinstance(d["rutina"], dict) else None
+        if not isinstance(prep, dict):
+            err("Rutina", 'Faltan los minutos para preparar ("preparar_min").')
+        else:
+            for hora, minutos in prep.items():
+                if not HORA.match(str(hora)):
+                    err("Rutina", f'Hora no válida: "{hora}" (use HH:MM).')
+                if not (isinstance(minutos, int) and not isinstance(minutos, bool) and 0 <= minutos <= 120):
+                    err("Rutina", f"Minutos no válidos para las {hora}: use de 0 a 120.")
 
     return errores, avisos
 
