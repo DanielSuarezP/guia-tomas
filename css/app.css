@@ -266,3 +266,34 @@ a { color: var(--azul); }
 .siguiente-med { border-color: var(--azul); border-width: 2px; }
 .botones > * { min-width: 0; text-align: center; }
 .hora-tarjeta .botones .boton span, .siguiente-med .boton span { white-space: normal; text-align: left; }
+
+/* 0.3 · Formulario para editar y añadir medicamentos */
+.formulario h2 { margin-top: 0; }
+.formulario .campo { margin: 12px 0; }
+.campo select, .campo textarea { min-height: var(--toque); font: inherit; padding: 8px 12px; border: 2px solid var(--borde); border-radius: 12px; background: #fff; color: var(--texto); width: 100%; }
+.campo textarea { min-height: 72px; resize: vertical; }
+.campo input { width: 100%; }
+.campo small, .formulario small { font-weight: 400; color: var(--suave); font-size: 0.85rem; }
+.campo input:focus, .campo select:focus, .campo textarea:focus { outline: 3px solid var(--azul-claro); border-color: var(--azul); }
+.dos { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tres { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.dos .campo, .tres .campo { margin: 6px 0; }
+.fila-toma, .paso-form { border-top: 1px solid var(--borde); padding-top: 10px; margin-top: 10px; }
+.dias { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin: 8px 0; }
+.dia-boton { min-height: 48px; border-radius: 12px; border: 2px solid var(--borde); background: #fff; font: inherit; font-weight: 700; color: var(--suave); }
+.dia-boton.activo { background: var(--azul); border-color: var(--azul); color: #fff; }
+.checks { display: flex; gap: 16px; flex-wrap: wrap; margin: 10px 0; }
+.check { display: flex; align-items: center; gap: 10px; min-height: 48px; font-weight: 600; }
+.check input { width: 24px; height: 24px; }
+.mover { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.fuente-cambio { border: 2px solid var(--ambar); background: var(--ambar-claro); }
+.ambar-texto { color: var(--ambar); font-weight: 600; }
+.rojo-texto { color: var(--rojo); font-weight: 600; }
+.antes { margin: 4px 0 0; padding-left: 18px; font-size: 0.9rem; }
+.lista-prep { list-style: none; padding: 0; margin: 8px 0; }
+.lista-prep li { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--borde); }
+.lista-prep li > span:first-child { flex: 1; font-weight: 600; }
+.lista-prep input { width: 84px; min-height: 48px; font: inherit; text-align: center; border: 2px solid var(--borde); border-radius: 12px; }
+.chip-fecha b { font-weight: 700; color: var(--ambar); }
+.chip-fecha { text-align: right; line-height: 1.25; }
+h1 + .nota, h1 + .boton, .volver + .nota { margin-top: 10px; }
